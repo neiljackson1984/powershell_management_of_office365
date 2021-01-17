@@ -350,7 +350,7 @@ if(! $configuration){
     
     Disconnect-AzureAD
     
-    $configuration = Get-Content -Raw $pathOfTheConfigurationFile | Convert-FromJSON
+    $configuration = Get-Content -Raw $pathOfTheConfigurationFile | ConvertFrom-JSON
 }
 
 #at this point, we expect to have a valid $configuration and can proceed with making the connection:
