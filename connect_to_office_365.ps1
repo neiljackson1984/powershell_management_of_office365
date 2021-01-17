@@ -355,10 +355,13 @@ if(! $configuration){
 
 #at this point, we expect to have a valid $configuration and can proceed with making the connection:
 
+# to-do: confirm that the certificate specified in the configuration file is accessible from the certificate store.  If not, 
+# attempt to load the certificate from the pfx file, if the pfx file exists.
+
 Connect-AzureAD `
     -ApplicationId $configuration.applicationAppId `
     -CertificateThumbprint $configuration.certificateThumbprint `
-    -TenantId $configuration.tenantId `
+    -TenantId $configuration.tenantId 
 
 Connect-ExchangeOnline `
     -AppID $configuration.applicationAppId  `
