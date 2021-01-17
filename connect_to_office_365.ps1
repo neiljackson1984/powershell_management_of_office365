@@ -251,15 +251,21 @@ if(! $configuration){
             $requiredResourceAccess.ResourceAccess = $ResourceAccessObjects
 
             # set the required resource access
-            Set-AzureADApplication -ObjectId $childApp.ObjectId -RequiredResourceAccess $requiredResourceAccess
+            #actually, we want to append to the app's RequiredResourceAccessList, not overwrite it.
+            $initialRequiredResourceAccessList = (Get-AzureADObjectByObjectId -ObjectId $application.ObjectId).RequiredResourceAccess
+            $newRequiredResourceAccessList = $initialRequiredResourceAccessList + $requiredResourceAccess
+            
+            Set-AzureADApplication -ObjectId $childApp.ObjectId -RequiredResourceAccess $newRequiredResourceAccessList
             Start-Sleep -s 1
 
             # grant the required resource access
             foreach ($RoleAssignment in $RoleAssignments) {
                 Write-Output -InputObject ('Granting admin consent for App Role: {0}' -f $($RoleAssignment.Value))
                 New-AzureADServiceAppRoleAssignment -ObjectId $spForApp.ObjectId -Id $RoleAssignment.Id -PrincipalId $spForApp.ObjectId -ResourceId $targetSp.ObjectId
-                Start-Sleep -s 1
+                # Start-Sleep -s 1
             }
+            
+            #TO-do: see if we can get rid of, or at least reduce, the above sleeps.
         }
     }
 
@@ -371,7 +377,7 @@ Connect-ExchangeOnline `
 
 # exit     
 
-
+$application = Get-AzureADApplication -SearchString $application.DisplayName
 
 # [System.Text.Encoding]::ASCII.GetString((Get-AzureADApplicationKeyCredential -ObjectId $application.ObjectId  ).CustomKeyIdentifier)
 # Get-AzureADServicePrincipalKeyCredential -ObjectId $servicePrincipal.ObjectId
