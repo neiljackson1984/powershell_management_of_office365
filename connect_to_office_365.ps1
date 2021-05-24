@@ -119,6 +119,14 @@
                 'Sites.ReadWrite.All',
                 'Mail.ReadBasic.All'
             )
+        },
+        @{
+            displayNameOfTargetServicePrincipal = 'Office 365 SharePoint Online';
+            namesOfAppRoles = @(
+                'Sites.FullControl.All',
+                'TermStore.ReadWrite.All',
+                'User.ReadWriteAll'
+            )
         }
     )
     
@@ -373,6 +381,22 @@ Connect-ExchangeOnline `
     -AppID $configuration.applicationAppId  `
     -CertificateThumbprint $configuration.certificateThumbprint `
     -Organization ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
+
+$sharepointServiceUrl=(((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + "-admin.sharepoint.com"
+
+# Connect-SPOService -Url $sharepointServiceUrl
+# Connect-PnPOnline `
+    # -ClientId $configuration.applicationAppId  `
+    # -Tenant (Get-AzureAdDomain | where-object {$_.IsInitial}).Name `
+    # -Thumbprint $configuration.certificateThumbprint 
+    
+# Install-Module -Name "PnP.PowerShell"   
+    
+Connect-PnPOnline `
+    -Url ( "https://" +  (((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + ".sharepoint.com") `
+    -ClientId $configuration.applicationAppId  `
+    -Tenant $configuration.tenantId `
+    -Thumbprint $configuration.certificateThumbprint 
 
 
 # exit     
