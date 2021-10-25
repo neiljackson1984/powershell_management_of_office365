@@ -372,36 +372,45 @@ if(! $configuration){
 # to-do: confirm that the certificate specified in the configuration file is accessible from the certificate store.  If not, 
 # attempt to load the certificate from the pfx file, if the pfx file exists.
 
-Connect-AzureAD `
-    -ApplicationId $configuration.applicationAppId `
-    -CertificateThumbprint $configuration.certificateThumbprint `
-    -TenantId $configuration.tenantId 
+if($azureConnection.Account -eq $null){
+    $azureConnection = Connect-AzureAD `
+        -ApplicationId $configuration.applicationAppId `
+        -CertificateThumbprint $configuration.certificateThumbprint `
+        -TenantId $configuration.tenantId 
 
-Connect-ExchangeOnline `
-    -AppID $configuration.applicationAppId  `
-    -CertificateThumbprint $configuration.certificateThumbprint `
-    -Organization ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
+    #ideally, we should do a separate test for connection for each of the modules (AzureAD, Exchange, and Sharepoint).
+    # However, as a hack, I am only looking at the AzureAD module.
 
-$sharepointServiceUrl=(((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + "-admin.sharepoint.com"
+    Connect-ExchangeOnline `
+        -AppID $configuration.applicationAppId  `
+        -CertificateThumbprint $configuration.certificateThumbprint `
+        -Organization ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
 
-# Connect-SPOService -Url $sharepointServiceUrl
-# Connect-PnPOnline `
-    # -ClientId $configuration.applicationAppId  `
-    # -Tenant (Get-AzureAdDomain | where-object {$_.IsInitial}).Name `
-    # -Thumbprint $configuration.certificateThumbprint 
+    # $sharepointServiceUrl=(((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + "-admin.sharepoint.com"
+
+    # Connect-SPOService -Url $sharepointServiceUrl
+    # Connect-PnPOnline `
+        # -ClientId $configuration.applicationAppId  `
+        # -Tenant (Get-AzureAdDomain | where-object {$_.IsInitial}).Name `
+        # -Thumbprint $configuration.certificateThumbprint 
+        
+    # Install-Module -Name "PnP.PowerShell"   
+        
+    Connect-PnPOnline `
+        -Url ( "https://" +  (((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + ".sharepoint.com") `
+        -ClientId $configuration.applicationAppId  `
+        -Tenant $configuration.tenantId `
+        -Thumbprint $configuration.certificateThumbprint 
+        
+    $application = Get-AzureADApplication -SearchString $application.DisplayName
     
-# Install-Module -Name "PnP.PowerShell"   
-    
-Connect-PnPOnline `
-    -Url ( "https://" +  (((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + ".sharepoint.com") `
-    -ClientId $configuration.applicationAppId  `
-    -Tenant $configuration.tenantId `
-    -Thumbprint $configuration.certificateThumbprint 
-
+} else {
+    Write-Host "It seems that a connection to AzureAD already exists, so we will not bother attempting to reconnect to AzureAD (or ExchangeOnline, or Sharepoint)"
+}
 
 # exit     
 
-$application = Get-AzureADApplication -SearchString $application.DisplayName
+
 
 # [System.Text.Encoding]::ASCII.GetString((Get-AzureADApplicationKeyCredential -ObjectId $application.ObjectId  ).CustomKeyIdentifier)
 # Get-AzureADServicePrincipalKeyCredential -ObjectId $servicePrincipal.ObjectId
