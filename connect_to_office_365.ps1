@@ -372,7 +372,11 @@ if(! $configuration){
 # to-do: confirm that the certificate specified in the configuration file is accessible from the certificate store.  If not, 
 # attempt to load the certificate from the pfx file, if the pfx file exists.
 
-if($azureConnection.Account -eq $null){
+# if($azureConnection.Account -eq $null){
+if(-not (& {
+try{[Microsoft.Open.Azure.AD.CommonLibrary.AzureSession]::AccessTokens}
+catch{ $null}
+})){
     $azureConnection = Connect-AzureAD `
         -ApplicationId $configuration.applicationAppId `
         -CertificateThumbprint $configuration.certificateThumbprint `
