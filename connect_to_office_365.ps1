@@ -2,6 +2,22 @@
 #To get pre-requisites:
 # Install-Module -Confirm:$false -Force -Name 'AzureAD', 'ExchangeOnlineManagement', 'PnP.PowerShell'
 
+[CmdletBinding()]
+Param (
+
+    
+    
+    [Parameter(HelpMessage=
+        @"
+The path of the configuration file.
+"@
+    )]
+    [String]$pathOfTheConfigurationFile = "config.json" # (Join-Path $PSScriptRoot "config.json")
+)
+
+
+$certificateStorageLocation = "cert:\localmachine\my"
+
 
 .{$roleSpecifications = `
     @(
@@ -214,11 +230,6 @@
     
 }
 
-$pathOfTheConfigurationFile = (Join-Path $PSScriptRoot "config.json")
-$pathOfPfxFile = (Join-Path $PSScriptRoot "certificate.pfx")
-$passwordOfthePfxFile = ""
-$certificateStorageLocation = "cert:\localmachine\my"
-
 #attempt to read configuration from the configuration file
 try {
     $configuration = Get-Content -Raw $pathOfTheConfigurationFile | ConvertFrom-JSON
@@ -282,18 +293,25 @@ if(! $configuration){
     }
 
     Connect-AzureAD
-    #following along with insturctions at: https://docs.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2?view=exchange-ps
+    #following along with instructions at: https://docs.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2?view=exchange-ps
 
     # Create the self signed cert
-    # $pathOfPfxFile =   "cert.pfx"
     
-    #attempt to load and import into the certificate manager the certificate in the pfx file (if the pfx file exists) or else a newly-created certificate, which we will write to the certificate file for future use.
-    if( ! $passwordOfthePfxFile ){$securePassword = (New-Object System.Security.SecureString);} else {$securePassword = (ConvertTo-SecureString -String $passwordOfthePfxFile -AsPlainText -Force);}
-    try {
-        $certificate = Import-PfxCertificate -FilePath $pathOfPfxFile -Password $securePassword -CertStoreLocation $certificateStorageLocation
-    } catch {
-        Write-Output "Failed to import the certificate from the certificate file"
-        Remove-Variable certificate -ErrorAction SilentlyContinue
+    # construct (or load existing from file) a $certificate, and ensure that the $certificate is installed in the $certificateStorageLocation for later use.
+    $certificate = $null
+    
+    # $pathOfPfxFile = (Join-Path $PSScriptRoot "certificate.pfx")
+    # $passwordOfthePfxFile = ""
+    
+    if($pathOfPfxFile){
+        $securePassword =  $( if( $passwordOfthePfxFile ) {(ConvertTo-SecureString -String $passwordOfthePfxFile -AsPlainText -Force)} else {(New-Object System.Security.SecureString)}  )
+        try {
+            $certificate = Import-PfxCertificate -FilePath $pathOfPfxFile -Password $securePassword -CertStoreLocation $certificateStorageLocation
+        } catch {
+            Write-Output "Failed to import the certificate from the certificate file"
+            # Remove-Variable certificate -ErrorAction SilentlyContinue
+            $certificate = $null
+        }
     }
     
     if(!$certificate){
@@ -303,7 +321,8 @@ if(! $configuration){
         $notAfter = $endDate.AddYears(10)
 
         $certificate = (New-SelfSignedCertificate -CertStoreLocation $certificateStorageLocation -DnsName com.foo.bar -KeyExportPolicy Exportable -Provider "Microsoft Enhanced RSA and AES Cryptographic Provider" -NotAfter $notAfter)
-        Export-PfxCertificate -cert $certificate -Password $securePassword -FilePath $pathOfPfxFile
+        # Export-PfxCertificate -cert $certificate -Password $securePassword -FilePath $pathOfPfxFile
+        # 2021-10-26: I have decided to no longer export the certificate to a file -- it should suffice, and will be more secure, to have $certificateStorageLocation be the only place where the certificate's private key is stored.
     }
 
     $displayNameOfApplication = (Get-AzureADCurrentSessionInfo).Account.ToString() + "_powershell_management"
