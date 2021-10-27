@@ -1,6 +1,34 @@
 
 #To get pre-requisites:
 # Install-Module -Confirm:$false -Force -Name 'AzureAD', 'ExchangeOnlineManagement', 'PnP.PowerShell'
+# Install-Module -Confirm:$false -Force -Name 'AzureADPreview', 'ExchangeOnlineManagement', 'PnP.PowerShell'
+# UnInstall-Module -Confirm:$false -Force -Name 'AzureAD'
+# UnInstall-Module -Confirm:$false -Force -Name 'AzureADPreview'
+# to make this work with Powershell Core (which, as of 2021-10-26, does not work out of the box with the AzureAD module), install the following special version of the AzureAD module as follows:
+# (thanks to https://endjin.com/blog/2019/05/how-to-use-the-azuread-module-in-powershell-core)
+###    # Check if test gallery is registered
+###    $packageSource = Get-PackageSource -Name 'Posh Test Gallery'
+###    if (!$packageSource)
+###    {
+###    	$packageSource = Register-PackageSource -Trusted -ProviderName 'PowerShellGet' -Name 'Posh Test Gallery' -Location 'https://www.poshtestgallery.com/api/v2/'
+###    }
+###    
+###    # Check if module is installed
+###    $module = Get-Module 'AzureAD.Standard.Preview' -ListAvailable -ErrorAction SilentlyContinue
+###    
+###    if (!$module) 
+###    {
+###      Write-Host "Installing module AzureAD.Standard.Preview ..."
+###      $module = Install-Module -Name 'AzureAD.Standard.Preview' -Force -Scope CurrentUser -SkipPublisherCheck -AllowClobber 
+###      Write-Host "Module installed"
+###    }
+# when I attempt connect-azuread in powershell core (even when I am using the version of connect-azuread from the AzureAD.Standard.Preview module),
+# I encounter the error "Certificate based authentication is not supported in netcore version."
+# I take that as the nail in the coffin of the hope of using this script from within powershell core (for now).
+# Install-Module -Confirm:$false -Force -Name 'AzureAD', 'ExchangeOnlineManagement', 'PnP.PowerShell'
+# TODO (potentially): check the version of powershell that we are running under and throw some kind of error or warning if we notice that
+# we are running under powershell core, because the AzureAD module does not quite work correctly under powershell core, it seems.
+
 
 [CmdletBinding()]
 Param (
@@ -15,6 +43,10 @@ The path of the configuration file.
     [String]$pathOfTheConfigurationFile = "config.json" # (Join-Path $PSScriptRoot "config.json")
 )
 
+# Import-Module -Name 'AzureAD' -ErrorAction SilentlyContinue
+# Import-Module -Name 'AzureADPreview' -ErrorAction SilentlyContinue
+# Import-Module -Name 'ExchangeOnlineManagement'
+# Import-Module -Name 'PnP.PowerShell'
 
 $certificateStorageLocation = "cert:\localmachine\my"
 
