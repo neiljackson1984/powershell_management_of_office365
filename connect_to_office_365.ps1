@@ -1,4 +1,8 @@
 
+#To get pre-requisites:
+# Install-Module -Confirm:$false -Force -Name 'AzureAD', 'ExchangeOnlineManagement', 'PnP.PowerShell'
+
+
 .{$roleSpecifications = `
     @(
         @{
