@@ -445,9 +445,13 @@ catch{ $null}
         -CertificateThumbprint $configuration.certificateThumbprint `
         -Organization ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
 
-    # $sharepointServiceUrl=(((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + "-admin.sharepoint.com"
+    $sharepointServiceUrl="https://" +  (((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + "-admin.sharepoint.com"
 
-    # Connect-SPOService -Url $sharepointServiceUrl
+    # $s=@{
+    #     Url=$sharepointServiceUrl
+    #     # Credential=
+    # }; Connect-SPOService @s
+
     # Connect-PnPOnline `
         # -ClientId $configuration.applicationAppId  `
         # -Tenant (Get-AzureAdDomain | where-object {$_.IsInitial}).Name `
