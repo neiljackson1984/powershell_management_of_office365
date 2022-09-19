@@ -30,6 +30,19 @@
 # we are running under powershell core, because the AzureAD module does not quite work correctly under powershell core, it seems.
 
 
+# # update 2022-09-16:
+# # to get prerequisistes:
+# #   AzureADPreview (and AzureAD) STILL does not work completely correctly under powershell core.
+# #   The -UseWindowsPowerShell  option of powershell core's Import-Module function
+# #   seemed promising as a way to use the windowsPowershell module from within powershell core,
+# #   , but the serializing of the command output is a dealbreaker.  Therefore, we are STILL
+# #   constrained to use windowsPowershell and not powershell core.
+# powershell -c "Install-Module -Confirm:0 -Force -Name AzureADPreview"
+# powershell -c "Install-Module -Confirm:0 -Force -Name ExchangeOnlineManagement -AllowPrerelease"
+# powershell -c "Install-Module -Confirm:0 -Force -Name PnP.PowerShell"
+
+
+
 [CmdletBinding()]
 Param (
 
@@ -43,10 +56,11 @@ The path of the configuration file.
     [String]$pathOfTheConfigurationFile = "config.json" # (Join-Path $PSScriptRoot "config.json")
 )
 
-# Import-Module -Name 'AzureAD' -ErrorAction SilentlyContinue
-# Import-Module -Name 'AzureADPreview' -ErrorAction SilentlyContinue
-# Import-Module -Name 'ExchangeOnlineManagement'
-# Import-Module -Name 'PnP.PowerShell'
+# Import-Module -Name 'AzureAD'  -UseWindowsPowerShell -ErrorAction SilentlyContinue
+# Import-Module -Name 'AzureADPreview'   -UseWindowsPowerShell 
+Import-Module -Name 'AzureADPreview'   
+Import-Module -Name 'ExchangeOnlineManagement'
+Import-Module -Name 'PnP.PowerShell'
 
 $certificateStorageLocation = "cert:\localmachine\my"
 
@@ -362,10 +376,13 @@ if(! $configuration){
     # Get the Azure Active Directory Application, creating it if it does not already exist.
     $application = Get-AzureADApplication -SearchString $displayNameOfApplication
     if (! $application) {
-        $application = New-AzureADApplication -DisplayName $displayNameOfApplication `
-            -Homepage "https://localhost" `
-            -ReplyUrls "https://localhost" `
-            -IdentifierUris ('https://{0}/{1}' -f ((Get-AzureADTenantDetail).VerifiedDomains)[0].Name, $displayNameOfApplication) 
+        $s = @{
+            DisplayName                 = $displayNameOfApplication 
+            Homepage                    = "https://localhost" 
+            ReplyUrls                   = @("https://localhost") 
+            IdentifierUris              = ('https://{0}/{1}' -f ((Get-AzureADTenantDetail).VerifiedDomains)[0].Name, $displayNameOfApplication) 
+            # Oauth2AllowImplicitFlow     = True
+        }; $application = New-AzureADApplication @s 
     }
     else {
         Write-Output -InputObject ('App Registration {0} already exists' -f $displayNameOfApplication)
@@ -390,7 +407,7 @@ if(! $configuration){
     if(! $azureADDirectoryRoleMember ){
         Add-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId -RefObjectId $servicePrincipal.ObjectId 
     } else {
-        Write-Output -InputObject ('teh service principal already has global admin permissions.')
+        Write-Output -InputObject ('the service principal already has global admin permissions.')
     }
     # we could have probably gotten away simply wrapping Add-AzureADDirectoryRoleMember in a try/catch statement.
     
@@ -432,18 +449,73 @@ if(-not (& {
 try{[Microsoft.Open.Azure.AD.CommonLibrary.AzureSession]::AccessTokens}
 catch{ $null}
 })){
+    
+    Write-Host "about to do Connect-AzureAD"
     $azureConnection = Connect-AzureAD `
         -ApplicationId $configuration.applicationAppId `
         -CertificateThumbprint $configuration.certificateThumbprint `
         -TenantId $configuration.tenantId 
+    Write-Host "done"
 
     #ideally, we should do a separate test for connection for each of the modules (AzureAD, Exchange, and Sharepoint).
     # However, as a hack, I am only looking at the AzureAD module.
 
-    Connect-ExchangeOnline `
-        -AppID $configuration.applicationAppId  `
-        -CertificateThumbprint $configuration.certificateThumbprint `
-        -Organization ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
+    # Install-Module -Name ExchangeOnlineManagement -RequiredVersion 2.0.5 
+    # Install-Module -Name ExchangeOnlineManagement -AllowPrerelease -Confirm:$false -Force
+    # Install-Module -Name ExchangeOnlineManagement -AllowPrerelease -Confirm:$false -Force -Scope CurrentUser
+    Write-Host "about to do Connect-ExchangeOnline"
+    $s = @{
+        AppID                   = $configuration.applicationAppId  
+        CertificateThumbprint   = $configuration.certificateThumbprint 
+        Organization            = ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
+        ShowBanner              = $false
+    }
+    Write-Host "arguments are $($s | out-string)"
+    Connect-ExchangeOnline @s
+    Write-Host "done"
+
+
+    # connect to "Security & Compliance PowerShell in a Microsoft 365 organization."
+    # Write-Host "about to do Connect-IPPSSession "
+    # $s = @{
+    #     AppID                   = $configuration.applicationAppId  
+    #     CertificateThumbprint   = $configuration.certificateThumbprint 
+    #     Organization            = ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
+    # }
+    # Write-Host "arguments are $($s | out-string)"
+    # Connect-IPPSSession @s
+    # Write-Host "done"
+
+    # Connect-IPPSSession does not seem to be working properly with 
+    # unattended app-based authentication.  Connect-IPPSSession tends to 
+    # launch a username and apssword prompt (and then fails when the oauth redirect url doesn't match).
+    # It appears that connect-ipppssession is a wrapper around connect-exchangeonline.  
+    # connect-ippssession calls connect-exchangeonline with 
+    # a couple of parameters specified:
+    # -UseRPSSession:$true
+    # -ShowBanner:$false
+    # -ConnectionUri 'https://ps.compliance.protection.outlook.com/PowerShell-LiveId' 
+    # -AzureADAuthorizationEndpointUri 'https://login.microsoftonline.com/organizations'
+    
+    Write-Host "about to do our own equivalent of 'Connect-IPPSSession' "
+    $s = @{
+        AppID                               = $configuration.applicationAppId  
+        CertificateThumbprint               = $configuration.certificateThumbprint 
+        Organization                        = ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
+        UseRPSSession                       = $true
+        ShowBanner                          = $false
+        ConnectionUri                       = 'https://ps.compliance.protection.outlook.com/PowerShell-LiveId' 
+        AzureADAuthorizationEndpointUri     = 'https://login.microsoftonline.com/organizations'
+    }
+    Write-Host "arguments are $($s | out-string)"
+    Connect-ExchangeOnline @s
+    Write-Host "done"
+
+
+
+
+
+
 
     $sharepointServiceUrl="https://" +  (((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + "-admin.sharepoint.com"
 
@@ -458,13 +530,13 @@ catch{ $null}
         # -Thumbprint $configuration.certificateThumbprint 
         
     # Install-Module -Name "PnP.PowerShell"   
-        
+    Write-Host "about to do Connect-PnPOnline"    
     Connect-PnPOnline `
         -Url ( "https://" +  (((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + ".sharepoint.com") `
         -ClientId $configuration.applicationAppId  `
         -Tenant $configuration.tenantId `
         -Thumbprint $configuration.certificateThumbprint 
-        
+    Write-Host "done"    
     $application = Get-AzureADApplication -SearchString $application.DisplayName
     
 } else {
