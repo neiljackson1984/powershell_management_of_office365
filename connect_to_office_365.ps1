@@ -41,6 +41,13 @@
 # powershell -c "Install-Module -Confirm:0 -Force -Name ExchangeOnlineManagement -AllowPrerelease"
 # powershell -c "Install-Module -Confirm:0 -Force -Name PnP.PowerShell"
 
+# powershell -c "Install-Module -Confirm:0 -Force -Name Microsoft.Graph"; pwsh -c "Install-Module -Confirm:0 -Force -Name Microsoft.Graph"
+
+
+# the AzureADPreview module is being deprecated, and replaced with "Microsoft Graph Powershell"
+# see https://learn.microsoft.com/en-us/powershell/azure/active-directory/migration-faq?view=azureadps-2.0 
+# see https://learn.microsoft.com/en-us/powershell/microsoftgraph/azuread-msoline-cmdlet-map?view=graph-powershell-1.0
+# see https://practical365.com/connect-microsoft-graph-powershell-sdk/
 
 
 [CmdletBinding()]
@@ -61,6 +68,7 @@ The path of the configuration file.
 Import-Module -Name 'AzureADPreview'   
 Import-Module -Name 'ExchangeOnlineManagement'
 Import-Module -Name 'PnP.PowerShell'
+Import-Module -Name 'Microsoft.Graph'
 
 $certificateStorageLocation = "cert:\localmachine\my"
 
@@ -445,17 +453,35 @@ if(! $configuration){
 # attempt to load the certificate from the pfx file, if the pfx file exists.
 
 # if($azureConnection.Account -eq $null){
+# if(-not (& {
+# try{[Microsoft.Open.Azure.AD.CommonLibrary.AzureSession]::AccessTokens}
+# catch{ $null}
+# })){
 if(-not (& {
-try{[Microsoft.Open.Azure.AD.CommonLibrary.AzureSession]::AccessTokens}
+try{Get-MgOrganization}
 catch{ $null}
 })){
     
-    Write-Host "about to do Connect-AzureAD"
-    $azureConnection = Connect-AzureAD `
-        -ApplicationId $configuration.applicationAppId `
-        -CertificateThumbprint $configuration.certificateThumbprint `
-        -TenantId $configuration.tenantId 
+    
+    Write-Host "about to do Connect-MgGraph"
+    Select-MgProfile -Name Beta
+    $s = @{
+        ApplicationId           = $configuration.applicationAppId 
+        CertificateThumbprint   = $configuration.certificateThumbprint 
+        TenantId                = $configuration.tenantId 
+    }; Connect-MgGraph @s 
     Write-Host "done"
+
+
+    # Write-Host "about to do Connect-AzureAD"
+    # $s = @{
+    #     ApplicationId           = $configuration.applicationAppId 
+    #     CertificateThumbprint   = $configuration.certificateThumbprint 
+    #     TenantId                = $configuration.tenantId 
+    # }; $azureConnection = Connect-AzureAD @s 
+    # Write-Host "done"
+
+
 
     #ideally, we should do a separate test for connection for each of the modules (AzureAD, Exchange, and Sharepoint).
     # However, as a hack, I am only looking at the AzureAD module.
