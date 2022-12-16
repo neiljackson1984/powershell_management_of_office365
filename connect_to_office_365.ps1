@@ -68,7 +68,7 @@ The path of the configuration file.
 Import-Module -Name 'AzureADPreview'   
 Import-Module -Name 'ExchangeOnlineManagement'
 Import-Module -Name 'PnP.PowerShell'
-Import-Module -Name 'Microsoft.Graph'
+# Import-Module -Name 'Microsoft.Graph'
 
 $certificateStorageLocation = "cert:\localmachine\my"
 
