@@ -68,7 +68,12 @@ The path of the configuration file.
 Import-Module -Name 'AzureADPreview'   
 Import-Module -Name 'ExchangeOnlineManagement'
 Import-Module -Name 'PnP.PowerShell'
-# Import-Module -Name 'Microsoft.Graph'
+# Import-Module -Name 'Microsoft.Graph' strangely, explicitly importing the
+# Microsoft.Graph module takes a long time (several minutes). Fortunately, we do
+# not incur the same wait if we simply call commands without first importing
+# (which relies on the automatic-module-importing mechanism of powershell.)
+
+
 
 $certificateStorageLocation = "cert:\localmachine\my"
 
@@ -346,7 +351,8 @@ if(! $configuration){
         }
     }
 
-    Connect-AzureAD
+    # Connect-AzureAD
+    Connect-MgGraph -Scopes Application.Read.All, Application.ReadWrite.All
     #following along with instructions at: https://docs.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2?view=exchange-ps
 
     # Create the self signed cert
@@ -358,9 +364,18 @@ if(! $configuration){
     # $passwordOfthePfxFile = ""
     
     if($pathOfPfxFile){
-        $securePassword =  $( if( $passwordOfthePfxFile ) {(ConvertTo-SecureString -String $passwordOfthePfxFile -AsPlainText -Force)} else {(New-Object System.Security.SecureString)}  )
+        $securePassword =  $( 
+            if( $passwordOfthePfxFile ) {
+                ConvertTo-SecureString -String $passwordOfthePfxFile -AsPlainText -Force
+            } else {
+                New-Object System.Security.SecureString
+            }  
+        )
         try {
-            $certificate = Import-PfxCertificate -FilePath $pathOfPfxFile -Password $securePassword -CertStoreLocation $certificateStorageLocation
+            $certificate = Import-PfxCertificate `
+                -FilePath $pathOfPfxFile `
+                -Password $securePassword `
+                -CertStoreLocation $certificateStorageLocation
         } catch {
             Write-Output "Failed to import the certificate from the certificate file"
             # Remove-Variable certificate -ErrorAction SilentlyContinue
@@ -374,32 +389,53 @@ if(! $configuration){
         $endDate = $currentDate.AddYears(10)
         $notAfter = $endDate.AddYears(10)
 
-        $certificate = (New-SelfSignedCertificate -CertStoreLocation $certificateStorageLocation -DnsName com.foo.bar -KeyExportPolicy Exportable -Provider "Microsoft Enhanced RSA and AES Cryptographic Provider" -NotAfter $notAfter)
+        $certificate = New-SelfSignedCertificate `
+            -CertStoreLocation $certificateStorageLocation `
+            -DnsName com.foo.bar `
+            -KeyExportPolicy Exportable `
+            -Provider "Microsoft Enhanced RSA and AES Cryptographic Provider" `
+            -NotAfter $notAfter
         # Export-PfxCertificate -cert $certificate -Password $securePassword -FilePath $pathOfPfxFile
         # 2021-10-26: I have decided to no longer export the certificate to a file -- it should suffice, and will be more secure, to have $certificateStorageLocation be the only place where the certificate's private key is stored.
     }
 
-    $displayNameOfApplication = (Get-AzureADCurrentSessionInfo).Account.ToString() + "_powershell_management"
+    $displayNameOfApplication = (Get-MgContext).Account.ToString() + "_powershell_management"
     
     # Get the Azure Active Directory Application, creating it if it does not already exist.
-    $application = Get-AzureADApplication -SearchString $displayNameOfApplication
+    # $application = Get-AzureADApplication -SearchString $displayNameOfApplication
+    $application = Get-MgApplication -ConsistencyLevel eventual -Search "DisplayName:$displayNameOfApplication"
     if (! $application) {
         $s = @{
             DisplayName                 = $displayNameOfApplication 
-            Homepage                    = "https://localhost" 
-            ReplyUrls                   = @("https://localhost") 
-            IdentifierUris              = ('https://{0}/{1}' -f ((Get-AzureADTenantDetail).VerifiedDomains)[0].Name, $displayNameOfApplication) 
-            # Oauth2AllowImplicitFlow     = True
-        }; $application = New-AzureADApplication @s 
+            IdentifierUris              = ('https://{0}/{1}' -f ((Get-MgOrganization).VerifiedDomains)[0].Name, $displayNameOfApplication) 
+            Web = @{
+                HomePageUrl = "https://localhost"
+                LogoutUrl = "https://localhost"
+                # RedirectUriSettings = @(
+                #     @{
+                #         Index = 0
+                #         Uri = @("https://localhost") 
+                #     }
+                # )
+                RedirectUris = @("https://localhost") 
+                # ImplicitGrantSettings = @{
+                #     EnableAccessTokenIssuance = $True
+                #     EnableIdTokenIssuance = $True
+                # }
+                # I do not know how much of this stuff is strictly necessary
+            }
+        }; $application = New-MgApplication @s         
     }
     else {
         Write-Output -InputObject ('App Registration {0} already exists' -f $displayNameOfApplication)
     }
     
     # Get the service principal associated with $application, creating it if it does not already exist.
-    $servicePrincipal = Get-AzureADServicePrincipal -Filter ("appId eq '" + $application.AppId + "'")
+    # $servicePrincipal = Get-AzureADServicePrincipal -Filter ("appId eq '" + $application.AppId + "'")
+    $servicePrincipal = Get-MgServicePrincipal -Filter ("appId eq '" + $application.AppId + "'")
     if(! $servicePrincipal){
-        $servicePrincipal = New-AzureADServicePrincipal -AppId $application.AppId
+        # $servicePrincipal = New-AzureADServicePrincipal -AppId $application.AppId
+        $servicePrincipal = New-MgServicePrincipal -AppId $application.AppId
     }  else {
         Write-Output -InputObject ('Service Principal {0} already exists' -f $servicePrincipal)
     }
@@ -464,22 +500,23 @@ catch{ $null}
     
     
     Write-Host "about to do Connect-MgGraph"
-    Select-MgProfile -Name Beta
+    # Select-MgProfile -Name Beta
     $s = @{
-        ApplicationId           = $configuration.applicationAppId 
-        CertificateThumbprint   = $configuration.certificateThumbprint 
+        ClientId                = $configuration.applicationAppId 
+        # CertificateThumbprint   = $configuration.certificateThumbprint 
+        Certificate             = Get-Item (Join-Path $certificateStorageLocation $configuration.certificateThumbprint )
         TenantId                = $configuration.tenantId 
     }; Connect-MgGraph @s 
     Write-Host "done"
 
 
-    # Write-Host "about to do Connect-AzureAD"
-    # $s = @{
-    #     ApplicationId           = $configuration.applicationAppId 
-    #     CertificateThumbprint   = $configuration.certificateThumbprint 
-    #     TenantId                = $configuration.tenantId 
-    # }; $azureConnection = Connect-AzureAD @s 
-    # Write-Host "done"
+    Write-Host "about to do Connect-AzureAD"
+    $s = @{
+        ApplicationId           = $configuration.applicationAppId 
+        CertificateThumbprint   = $configuration.certificateThumbprint 
+        TenantId                = $configuration.tenantId 
+    }; $azureConnection = Connect-AzureAD @s 
+    Write-Host "done"
 
 
 
@@ -493,7 +530,7 @@ catch{ $null}
     $s = @{
         AppID                   = $configuration.applicationAppId  
         CertificateThumbprint   = $configuration.certificateThumbprint 
-        Organization            = ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
+        Organization            = ((Get-MgOrganization).VerifiedDomains | where {$_.IsInitial -eq $true}).Name
         ShowBanner              = $false
     }
     Write-Host "arguments are $($s | out-string)"
@@ -527,7 +564,7 @@ catch{ $null}
     $s = @{
         AppID                               = $configuration.applicationAppId  
         CertificateThumbprint               = $configuration.certificateThumbprint 
-        Organization                        = ((Get-AzureADTenantDetail).VerifiedDomains | where {$_.Initial -eq $true}).Name
+        Organization                         = ((Get-MgOrganization).VerifiedDomains | where {$_.IsInitial -eq $true}).Name
         UseRPSSession                       = $true
         ShowBanner                          = $false
         ConnectionUri                       = 'https://ps.compliance.protection.outlook.com/PowerShell-LiveId' 
@@ -543,7 +580,7 @@ catch{ $null}
 
 
 
-    $sharepointServiceUrl="https://" +  (((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + "-admin.sharepoint.com"
+    $sharepointServiceUrl="https://" +  (((Get-MgOrganization).VerifiedDomains | where {$_.IsInitial -eq $true}).Name -Split '\.')[0] + "-admin.sharepoint.com"
 
     # $s=@{
     #     Url=$sharepointServiceUrl
@@ -558,7 +595,7 @@ catch{ $null}
     # Install-Module -Name "PnP.PowerShell"   
     Write-Host "about to do Connect-PnPOnline"    
     Connect-PnPOnline `
-        -Url ( "https://" +  (((Get-AzureAdDomain | where-object {$_.IsInitial}).Name) -Split '\.')[0] + ".sharepoint.com") `
+        -Url ( "https://" +  (((Get-MgOrganization).VerifiedDomains | where {$_.IsInitial -eq $true}).Name -Split '\.')[0] + ".sharepoint.com") `
         -ClientId $configuration.applicationAppId  `
         -Tenant $configuration.tenantId `
         -Thumbprint $configuration.certificateThumbprint 
