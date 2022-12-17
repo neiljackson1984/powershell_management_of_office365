@@ -48,6 +48,11 @@
 # see https://learn.microsoft.com/en-us/powershell/azure/active-directory/migration-faq?view=azureadps-2.0 
 # see https://learn.microsoft.com/en-us/powershell/microsoftgraph/azuread-msoline-cmdlet-map?view=graph-powershell-1.0
 # see https://practical365.com/connect-microsoft-graph-powershell-sdk/
+#see https://learn.microsoft.com/en-us/graph/api/overview
+# as part of the migration process, the commands Find-MgGraphCommand and Find-MgGraphPermission are useful to figure out
+# what MgGraph command to use in place of a given AzureAD command, and what permissions (i.e. scopes, I think) we need
+# in order to be able to run a given mggraph command (oops -- that is not exactly what those commands do (or not the only thing that they do).
+# to translate from powershell command to api endpoint, use Find-MgGraphCommand with the -Command option.
 
 
 [CmdletBinding()]
@@ -213,10 +218,10 @@ $certificateStorageLocation = "cert:\localmachine\my"
     if($false){ # how to construct $roleSpecifications programmatically, if needed:
         #=======================================
         # we can look up the proper/allowed $roleSpecifications by doing the following in a tenant that is already properly set up.
-        # this assumes that $servicePrincipal is the service principal for the app that we have created.
+        # this assumes that $azureAdServicePrincipal is the service principal for the app that we have created.
 
         $targetServicePrincipals = `
-            Get-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId | 
+            Get-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId | 
             select -Unique ResourceId |
             foreach-object { (Get-AzureADObjectByObjectId -ObjectIds @($_.ResourceId  )) }
 
@@ -229,7 +234,7 @@ $certificateStorageLocation = "cert:\localmachine\my"
             }
 
             
-            $appRoleIds = Get-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId |
+            $appRoleIds = Get-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId |
             where {$_.ResourceId -eq $targetServicePrincipal.ObjectId} |
             foreach-object {$_.Id}
             
@@ -274,12 +279,12 @@ $certificateStorageLocation = "cert:\localmachine\my"
 
         # #or, while working in some other tenant that is set up properly, by doing
         # $namesOfAppPermissionsThatWeWant = `
-            # Get-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId |
+            # Get-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId |
             # where {$_.ResourceId -eq $targetServicePrincipal.ObjectId} -PipelineVariable roleAssignment |
             # foreach-object { ($targetServicePrincipal.AppRoles | where {$_.Id -eq $roleAssignment.Id}).Value }
         
         # $namesOfTargetServicePrincipals =  `
-            # Get-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId | 
+            # Get-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId | 
             # select -Unique ResourceId |
             # foreach-object { (Get-AzureADObjectByObjectId -ObjectIds @($_.ResourceId  )).DisplayName}
     }
@@ -306,12 +311,13 @@ if(! $configuration){
             param
             (
                 [string] $targetServicePrincipalName,
-                $appPermissionsRequired,
-                $childApp,
-                $spForApp
+                [String[]] $appPermissionsRequired,
+                [Microsoft.Graph.PowerShell.Models.MicrosoftGraphApplication1] $childApp,
+                [Microsoft.Graph.PowerShell.Models.MicrosoftGraphServicePrincipal] $spForApp
             )
 
-            $targetSp = Get-AzureADServicePrincipal -Filter "DisplayName eq '$($targetServicePrincipalName)'"
+            # $targetSp = Get-AzureADServicePrincipal -Filter "DisplayName eq '$($targetServicePrincipalName)'"
+            $targetSp = Get-MgServicePrincipal -Filter "DisplayName eq '$($targetServicePrincipalName)'"
 
             # Iterate Permissions array
             Write-Output -InputObject ('Retrieve Role Assignments objects')
@@ -320,7 +326,10 @@ if(! $configuration){
                 $RoleAssignment = $targetSp.AppRoles | Where-Object { $_.Value -eq $AppPermission}
                 $RoleAssignments += $RoleAssignment
             }
-
+            
+            ###############################################################################
+            ## 2022-12-16-1905 ## START HERE>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+            ###############################################################################
             $ResourceAccessObjects = New-Object 'System.Collections.Generic.List[Microsoft.Open.AzureAD.Model.ResourceAccess]'
             foreach ($RoleAssignment in $RoleAssignments) {
                 $resourceAccess = New-Object -TypeName "Microsoft.Open.AzureAD.Model.ResourceAccess"
@@ -334,7 +343,7 @@ if(! $configuration){
 
             # set the required resource access
             #actually, we want to append to the app's RequiredResourceAccessList, not overwrite it.
-            $initialRequiredResourceAccessList = (Get-AzureADObjectByObjectId -ObjectId $application.ObjectId).RequiredResourceAccess
+            $initialRequiredResourceAccessList = (Get-AzureADObjectByObjectId -ObjectId $azureAdApplication.ObjectId).RequiredResourceAccess
             $newRequiredResourceAccessList = $initialRequiredResourceAccessList + $requiredResourceAccess
             
             Set-AzureADApplication -ObjectId $childApp.ObjectId -RequiredResourceAccess $newRequiredResourceAccessList
@@ -402,9 +411,9 @@ if(! $configuration){
     $displayNameOfApplication = (Get-MgContext).Account.ToString() + "_powershell_management"
     
     # Get the Azure Active Directory Application, creating it if it does not already exist.
-    # $application = Get-AzureADApplication -SearchString $displayNameOfApplication
-    $application = Get-MgApplication -ConsistencyLevel eventual -Search "DisplayName:$displayNameOfApplication"
-    if (! $application) {
+    # $azureAdApplication = Get-AzureADApplication -SearchString $displayNameOfApplication
+    $mgApplication = Get-MgApplication -ConsistencyLevel eventual -Search "DisplayName:$displayNameOfApplication"
+    if (! $mgApplication) {
         $s = @{
             DisplayName                 = $displayNameOfApplication 
             IdentifierUris              = ('https://{0}/{1}' -f ((Get-MgOrganization).VerifiedDomains)[0].Name, $displayNameOfApplication) 
@@ -424,61 +433,126 @@ if(! $configuration){
                 # }
                 # I do not know how much of this stuff is strictly necessary
             }
-        }; $application = New-MgApplication @s         
+        }; $mgApplication = New-MgApplication @s         
     }
     else {
         Write-Output -InputObject ('App Registration {0} already exists' -f $displayNameOfApplication)
     }
     
-    # Get the service principal associated with $application, creating it if it does not already exist.
-    # $servicePrincipal = Get-AzureADServicePrincipal -Filter ("appId eq '" + $application.AppId + "'")
-    $servicePrincipal = Get-MgServicePrincipal -Filter ("appId eq '" + $application.AppId + "'")
-    if(! $servicePrincipal){
-        # $servicePrincipal = New-AzureADServicePrincipal -AppId $application.AppId
-        $servicePrincipal = New-MgServicePrincipal -AppId $application.AppId
+    # Get the service principal associated with $azureAdApplication, creating it if it does not already exist.
+    # $azureAdServicePrincipal = Get-AzureADServicePrincipal -Filter ("appId eq '" + $azureAdApplication.AppId + "'")
+    $mgServicePrincipal = Get-MgServicePrincipal -Filter ("appId eq '" + $mgApplication.AppId + "'")
+    if(! $mgServicePrincipal){
+        # $azureAdServicePrincipal = New-AzureADServicePrincipal -AppId $azureAdApplication.AppId
+        $mgServicePrincipal = New-MgServicePrincipal -AppId $mgApplication.AppId
     }  else {
-        Write-Output -InputObject ('Service Principal {0} already exists' -f $servicePrincipal)
+        Write-Output -InputObject ('Service Principal {0} already exists' -f $mgServicePrincipal)
     }
     
     #ensure that the service principal has global admin permissions to the current tenant
-    $globalAdminAzureAdDirectoryRole =  Get-AzureADDirectoryRole | where {$_.DisplayName -eq "Global Administrator"}
-    if(!$globalAdminAzureAdDirectoryRole){
-        $globalAdminAzureAdDirectoryRole =  Get-AzureADDirectoryRole | where {$_.DisplayName -eq "Company Administrator"}
+    # $globalAdminAzureAdDirectoryRole =  Get-AzureADDirectoryRole | where {$_.DisplayName -eq "Global Administrator"}
+    $globalAdminMgDirectoryRole =  Get-MgDirectoryRole | where {$_.DisplayName -eq "Global Administrator"}
+    # todo: do this search on the server side, rather than here on the client side, by using a -filter (or maybe -search ?) argument.
+
+    # if(!$globalAdminAzureAdDirectoryRole){
+    if(!$globalAdminMgDirectoryRole){
+        # $globalAdminAzureAdDirectoryRole =  Get-AzureADDirectoryRole | where {$_.DisplayName -eq "Company Administrator"}
+        $globalAdminMgDirectoryRole =  Get-MgDirectoryRole  | where {$_.DisplayName -eq "Company Administrator"}
         # for reasons unknown, in some tenants, the displayname of the global admin role is "Company Administrator"
     }
-    $azureADDirectoryRoleMember = Get-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId | where {$_.ObjectId -eq $servicePrincipal.ObjectId}
-    # iff. $servicePrincipal has the global admin permission, then $azureADDirectoryRoleMember will be $servicePrincipal, otherwise will be null
-    if(! $azureADDirectoryRoleMember ){
-        Add-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId -RefObjectId $servicePrincipal.ObjectId 
+    # $azureADDirectoryRoleMember = Get-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId | where {$_.ObjectId -eq $azureAdServicePrincipal.ObjectId}
+    # $mgDirectoryRoleMember = Get-MgDirectoryRoleMember -DirectoryRoleId $globalAdminMgDirectoryRole.Id | where {$_.Id -eq $mgServicePrincipal.Id}
+    # the above command seems only to return "user" objects and not also servicePrincipal objects.  This is unacceptable because we are interested in serviceprincipal objects.
+    
+    ##  $mgDirectoryRoleMember = Get-MgDirectoryRoleMember -ConsistencyLevel eventual -DirectoryRoleId $globalAdminMgDirectoryRole.Id | where {$_.Id -eq $mgServicePrincipal.Id}
+    #
+    # you might think that adding "-ConsistencyLevel eventual" would be enough,
+    # but it's not; you also have to add the -Count argument, even if you pass
+    # $null as Count. I do not understand why the Count argument is required in
+    # order to get the correct behavior.  Maybe it has something to do with
+    # paging of the results, but it strikes me as pretty kludgy to require the
+    # Count argument.
+
+    $mgDirectoryRoleMember = Get-MgDirectoryRoleMember -ConsistencyLevel eventual -Count $null -DirectoryRoleId $globalAdminMgDirectoryRole.Id | where {$_.Id -eq $mgServicePrincipal.Id}
+    
+
+    # iff. $azureAdServicePrincipal has the global admin permission, then $azureADDirectoryRoleMember will be $azureAdServicePrincipal, otherwise will be null
+    if(! $mgDirectoryRoleMember ){
+        # Add-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId -RefObjectId $azureAdServicePrincipal.ObjectId 
+        New-MgDirectoryRoleMemberByRef -DirectoryRoleId  $globalAdminMgDirectoryRole.Id  -oDataId "https://graph.microsoft.com/v1.0/directoryObjects/$($mgServicePrincipal.Id)"
+        # I have no idea how I would come up with the above value in the oDataId
+        # argument (except by blindly copying the example from
+        # https://learn.microsoft.com/en-us/powershell/module/microsoft.graph.identity.directorymanagement/new-mgdirectoryrolememberbyref?view=graph-powershell-1.0,
+        # which is what I did
+        # ) 
+        #
+        # possibly, I ought to be using New-MgRoleManagementDirectoryRoleAssignment
+        # instead.  see
+        # https://stackoverflow.com/questions/73088374/how-do-i-use-the-command-new-mgrolemanagementdirectoryroleassignment
+        # . 
     } else {
         Write-Output -InputObject ('the service principal already has global admin permissions.')
     }
     # we could have probably gotten away simply wrapping Add-AzureADDirectoryRoleMember in a try/catch statement.
     
     #ensure that our public key is installed in our application
-    $keyCredential = Get-AzureADApplicationKeyCredential -ObjectId $application.ObjectId | where { ($_.ToJson() | ConvertFrom-JSON).customKeyIdentifier -eq $certificate.Thumbprint }
+    # $keyCredential = Get-AzureADApplicationKeyCredential -ObjectId $azureAdApplication.ObjectId | where { 
+    #         ($_.ToJson() | ConvertFrom-JSON).customKeyIdentifier -eq $certificate.Thumbprint 
+    #     }
+
+    $keyCredential = $mgApplication.KeyCredentials | where { 
+            [System.Convert]::ToBase64String($_.CustomKeyIdentifier) -eq [System.Convert]::ToBase64String([System.Convert]::FromBase64String($certificate.Thumbprint))
+        }
+
     if(!$keyCredential){
-        $keyCredential = New-AzureADApplicationKeyCredential -ObjectId $application.ObjectId -StartDate $currentDate -EndDate $endDate -Type AsymmetricX509Cert -Usage Verify -Value ([System.Convert]::ToBase64String($certificate.GetRawCertData()))
+        # $s = @{
+        #     ObjectId = $azureAdApplication.ObjectId 
+        #     StartDate = $currentDate 
+        #     EndDate = $endDate 
+        #     Type = AsymmetricX509Cert 
+        #     Usage = Verify 
+        #     Value = [System.Convert]::ToBase64String($certificate.GetRawCertData())
+        # }; $keyCredential = New-AzureADApplicationKeyCredential @s
+        $s = @{
+            ApplicationId = $mgApplication.Id
+            KeyCredentials = @(
+                @{
+                    Type = "AsymmetricX509Cert"
+                    Usage = "Verify"
+                    Key = $certificate.GetRawCertData()
+                }
+            )
+        }; Update-MgApplication @s
     } else {
         Write-Output -InputObject ('keyCredential {0} already exists' -f $keyCredential)
     }
     
     #grant all the required approles (as defined by $roleSpecifications) to our app's service principal
     foreach ( $roleSpecification in $roleSpecifications){
+        # GrantAllThePermissionsWeWant `
+        #     -childApp $azureAdApplication `
+        #     -spForApp $azureAdServicePrincipal `
+        #     -targetServicePrincipalName $roleSpecification.displayNameOfTargetServicePrincipal `
+        #     -appPermissionsRequired $roleSpecification.namesOfAppRoles
         GrantAllThePermissionsWeWant `
-            -childApp $application `
-            -spForApp $servicePrincipal `
+            -childApp $mgApplication `
+            -spForApp $mgServicePrincipal `
             -targetServicePrincipalName $roleSpecification.displayNameOfTargetServicePrincipal `
             -appPermissionsRequired $roleSpecification.namesOfAppRoles
     }
 
     $configuration = @{
-        tenantId = (Get-AzureADTenantDetail).ObjectId;
-        applicationAppId = $application.AppId;
+        # tenantId = (Get-AzureADTenantDetail).ObjectId;
+        tenantId = (Get-MgOrganization).Id;
+
+        # applicationAppId = $azureAdApplication.AppId;
+        applicationAppId = $mgApplication.AppId;
+
         certificateThumbprint = $certificate.Thumbprint;
     } | ConvertTo-JSON | Out-File $pathOfTheConfigurationFile
     
-    Disconnect-AzureAD
+    # Disconnect-AzureAD
+    Disconnect-MgGraph
     
     $configuration = Get-Content -Raw $pathOfTheConfigurationFile | ConvertFrom-JSON
 }
@@ -600,7 +674,7 @@ catch{ $null}
         -Tenant $configuration.tenantId `
         -Thumbprint $configuration.certificateThumbprint 
     Write-Host "done"    
-    $application = Get-AzureADApplication -SearchString $application.DisplayName
+    $azureAdApplication = Get-AzureADApplication -SearchString $azureAdApplication.DisplayName
     
 } else {
     Write-Host "It seems that a connection to AzureAD already exists, so we will not bother attempting to reconnect to AzureAD (or ExchangeOnline, or Sharepoint)"
@@ -610,19 +684,19 @@ catch{ $null}
 
 
 
-# [System.Text.Encoding]::ASCII.GetString((Get-AzureADApplicationKeyCredential -ObjectId $application.ObjectId  ).CustomKeyIdentifier)
-# Get-AzureADServicePrincipalKeyCredential -ObjectId $servicePrincipal.ObjectId
+# [System.Text.Encoding]::ASCII.GetString((Get-AzureADApplicationKeyCredential -ObjectId $azureAdApplication.ObjectId  ).CustomKeyIdentifier)
+# Get-AzureADServicePrincipalKeyCredential -ObjectId $azureAdServicePrincipal.ObjectId
 # # Create the Service Principal and connect it to the Application
-# $servicePrincipal = New-AzureADServicePrincipal -AppId $application.AppId
+# $azureAdServicePrincipal = New-AzureADServicePrincipal -AppId $azureAdApplication.AppId
 
 
 
 # # Give the Service Principal global admin access to the current tenant (Get-AzureADDirectoryRole)
-# Add-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId -RefObjectId $servicePrincipal.ObjectId 
+# Add-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId -RefObjectId $azureAdServicePrincipal.ObjectId 
 
-# Remove-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId -MemberId $servicePrincipal.ObjectId
+# Remove-AzureADDirectoryRoleMember -ObjectId $globalAdminAzureAdDirectoryRole.ObjectId -MemberId $azureAdServicePrincipal.ObjectId
 
-# Get-AzureADApplicationOwner -ObjectId $application.ObjectId
+# Get-AzureADApplicationOwner -ObjectId $azureAdApplication.ObjectId
 
 # $result = `
     # $namesOfTargetServicePrincipals -PipelineVariable nameOfTargetServicePrincipal | 
@@ -650,14 +724,14 @@ catch{ $null}
 # New-AzureADServiceAppRoleAssignment `
     # -ResourceId $targetServicePrincipal.ObjectId `
     # -Id  $targetAppRole.Id `
-    # -PrincipalId  $servicePrincipal.ObjectId `
+    # -PrincipalId  $azureAdServicePrincipal.ObjectId `
     # -ObjectId ([Guid]::Empty)
         
 # $result = New-AzureADServiceAppRoleAssignment `
     # -ResourceId $targetServicePrincipal.ObjectId `
     # -Id  $targetAppRole.Id `
-    # -PrincipalId  $servicePrincipal.ObjectId `
-    # -ObjectId $servicePrincipal.ObjectId        
+    # -PrincipalId  $azureAdServicePrincipal.ObjectId `
+    # -ObjectId $azureAdServicePrincipal.ObjectId        
 
 # $requiredResourceAccess = New-Object -TypeName "Microsoft.Open.AzureAD.Model.RequiredResourceAccess"
 # $requiredResourceAccess.ResourceAppId = $targetSp.AppId
@@ -668,16 +742,16 @@ catch{ $null}
 
 
 # #result is of type Microsoft.Open.AzureAD.Model.AppRoleAssignment, and the newly-created 'role assignment' (aka permission) appears in the 'Other permissions' section (not in the 'configured permissions') of the app's "api permissions' page in the azure ad web interface.    
-# # also, the list returned by (Get-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId) remains empty.
-# Get-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId -All $true
+# # also, the list returned by (Get-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId) remains empty.
+# Get-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId -All $true
 
-# $roleAssignment = (Get-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId)[0]
+# $roleAssignment = (Get-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId)[0]
 # Get-AzureADObjectByObjectId -ObjectIds @($roleAssignment.Id  )
 # Get-AzureADObjectByObjectId -ObjectIds @($roleAssignment.PrincipalId  )
 # Get-AzureADObjectByObjectId -ObjectIds @($roleAssignment.ResourceId  )
 # Get-AzureADObjectByObjectId -ObjectIds @($roleAssignment.ObjectId  )
 
-# Get-AzureADObjectByObjectId -ObjectIds @($application.AppId  )
+# Get-AzureADObjectByObjectId -ObjectIds @($azureAdApplication.AppId  )
 
 # (Get-AzureADObjectByObjectId -ObjectIds @($roleAssignment.ResourceId  )).AppRoles | Where {$_.Id -eq $roleAssignment.Id}
 # (Get-AzureADObjectByObjectId -ObjectIds @($roleAssignment.ResourceId  )).AppRoles | Where {$_.Id -eq $roleAssignment.ObjectId}
@@ -691,7 +765,7 @@ catch{ $null}
 # Write-Output -InputObject ('Retrieve Role Assignments objects')
 # $RoleAssignments = @()
 # Foreach ($AppPermission in $appPermissionsRequired) {
-    # $RoleAssignment = $servicePrincipal.AppRoles | Where-Object { $_.Value -eq $AppPermission}
+    # $RoleAssignment = $azureAdServicePrincipal.AppRoles | Where-Object { $_.Value -eq $AppPermission}
     # $RoleAssignments += $RoleAssignment
 # }
 
@@ -703,7 +777,7 @@ catch{ $null}
     # $ResourceAccessObjects.Add($resourceAccess)
 # }
 # $requiredResourceAccess = New-Object -TypeName "Microsoft.Open.AzureAD.Model.RequiredResourceAccess"
-# $requiredResourceAccess.ResourceAppId = $servicePrincipal.AppId
+# $requiredResourceAccess.ResourceAppId = $azureAdServicePrincipal.AppId
 # $requiredResourceAccess.ResourceAccess = $ResourceAccessObjects
 
 # $requiredResourceAccessList = New-Object 'System.Collections.Generic.List[Microsoft.Open.AzureAD.Model.RequiredResourceAccess]'
@@ -711,13 +785,13 @@ catch{ $null}
 # $requiredResourceAccessList.Add(...)
 
 # # set the required resource access
-# $application | Set-AzureADApplication  -RequiredResourceAccess $requiredResourceAccessList
+# $azureAdApplication | Set-AzureADApplication  -RequiredResourceAccess $requiredResourceAccessList
 # Start-Sleep -s 1
 
 # # grant the required resource access
 # foreach ($RoleAssignment in $RoleAssignments) {
     # Write-Output -InputObject ('Granting admin consent for App Role: {0}' -f $($RoleAssignment.Value))
-    # New-AzureADServiceAppRoleAssignment -ObjectId $spForApp.ObjectId -Id $RoleAssignment.Id -PrincipalId $spForApp.ObjectId -ResourceId $servicePrincipal.ObjectId
+    # New-AzureADServiceAppRoleAssignment -ObjectId $spForApp.ObjectId -Id $RoleAssignment.Id -PrincipalId $spForApp.ObjectId -ResourceId $azureAdServicePrincipal.ObjectId
     # Start-Sleep -s 1
 # }
 
@@ -731,14 +805,14 @@ catch{ $null}
 
 
 
-# # Remove-AzureAdApplication -ObjectId $application.ObjectId
-# # Remove-AzureADServicePrincipal -ObjectId $servicePrincipal.ObjectId
+# # Remove-AzureAdApplication -ObjectId $azureAdApplication.ObjectId
+# # Remove-AzureADServicePrincipal -ObjectId $azureAdServicePrincipal.ObjectId
 # #at this point, the configuration of our app in AzureAd is complete.
 # #Collect the configuration details into an object and serialize to a file for future use by the connect_to_office_365.ps1 script
 
 # $configuration = @{
     # tenantId = (Get-AzureADTenantDetail).ObjectId;
-    # servicePrincipalId = $servicePrincipal.AppId;
+    # servicePrincipalId = $azureAdServicePrincipal.AppId;
     # pathOfCertificateFile = $pathOfCertificateFile;
     # passwordOfCertificateFile = $passwordOfCertificateFile;
 # }
@@ -760,16 +834,16 @@ catch{ $null}
 # #Get-AzureADMSApplication
 
 # $autoscanManagementAzureAdApp = Get-AzureADApplication -ObjectId "94bbd8b1-a0e1-468a-aa8c-c0a8e340873f"
-# $servicePrincipal = Get-AzureADServicePrincipal -Filter ("appId eq '" + $autoscanManagementAzureAdApp.AppId + "'")
+# $azureAdServicePrincipal = Get-AzureADServicePrincipal -Filter ("appId eq '" + $autoscanManagementAzureAdApp.AppId + "'")
 # $azureAdDirectoryRole =  Get-AzureADDirectoryRole | where {$_.DisplayName -eq "Company Administrator"}
 
 
 # Get-AzureADDirectoryRoleMember -ObjectId $azureAdDirectoryRole.ObjectId
 
-# # New-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId    -Id $azureAdDirectoryRole.ObjectId  -PrincipalId <String>  -ResourceId <String>
-# # New-AzureADServiceAppRoleAssignment -ObjectId $servicePrincipal.ObjectId   -PrincipalId $servicePrincipal.ObjectId    -Id $azureAdDirectoryRole.ObjectId  
+# # New-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId    -Id $azureAdDirectoryRole.ObjectId  -PrincipalId <String>  -ResourceId <String>
+# # New-AzureADServiceAppRoleAssignment -ObjectId $azureAdServicePrincipal.ObjectId   -PrincipalId $azureAdServicePrincipal.ObjectId    -Id $azureAdDirectoryRole.ObjectId  
 
-# Add-AzureADDirectoryRoleMember -ObjectId $azureAdDirectoryRole.ObjectId  -RefObjectId $servicePrincipal.ObjectId 
+# Add-AzureADDirectoryRoleMember -ObjectId $azureAdDirectoryRole.ObjectId  -RefObjectId $azureAdServicePrincipal.ObjectId 
 
 # # Connect-ExchangeOnline -CertificateFilePath "J:\loberg_roofing\powershell management of Office365 for Loberg\mycert.pfx" -CertificatePassword (ConvertTo-SecureString -String "N4M%2ezK9FAkZurF" -AsPlainText -Force) -AppID "94bbd8b1-a0e1-468a-aa8c-c0a8e340873f" -Organization "appriver3651003074.onmicrosoft.com"
 # # Connect-ExchangeOnline -CertificateFilePath "J:\loberg_roofing\powershell management of Office365 for Loberg\mycert.pfx" -CertificatePassword (ConvertTo-SecureString -String "N4M%2ezK9FAkZurF" -AsPlainText -Force) -AppID "27b20dbe-43b3-4185-878b-bf564f7e2a21" -Organization "lobergroofing.com"
@@ -799,13 +873,13 @@ catch{ $null}
 
 
 # $autoscanManagementAzureAdApp = (Get-AzureADApplication -Filter ("AppId eq '" + $applicationClientId + "'"))
-# $servicePrincipal = Get-AzureADServicePrincipal -Filter ("appId eq '" + $autoscanManagementAzureAdApp.AppId + "'")
+# $azureAdServicePrincipal = Get-AzureADServicePrincipal -Filter ("appId eq '" + $autoscanManagementAzureAdApp.AppId + "'")
 
 
 # # $result = New-AzureADApplicationPasswordCredential -ObjectId $applicationClientId
-# # $result = New-AzureADApplicationPasswordCredential -ObjectId $servicePrincipal.ObjectId
+# # $result = New-AzureADApplicationPasswordCredential -ObjectId $azureAdServicePrincipal.ObjectId
 # # New-AzureADMSApplicationPassword -ObjectId $applicationClientId -PasswordCredential @{ displayname = "mypassword" }
-# # New-AzureADMSApplicationPassword -ObjectId $servicePrincipal.ObjectId -PasswordCredential @{ displayname = "mypassword" }
+# # New-AzureADMSApplicationPassword -ObjectId $azureAdServicePrincipal.ObjectId -PasswordCredential @{ displayname = "mypassword" }
 # $passwordCredential = New-AzureADMSApplicationPassword -ObjectId $autoscanManagementAzureAdApp.ObjectId -PasswordCredential @{ displayname = "mypassword" }
 # $clientSecret=$passwordCredential.SecretText
 
@@ -869,7 +943,7 @@ catch{ $null}
 # $secureCredential = New-Object System.Management.Automation.PSCredential ($applicationClientId, (ConvertTo-SecureString $clientSecret -AsPlainText -Force))
 # Connect-MsolService -Credential $secureCredential 
 
-# $secureCredential = New-Object System.Management.Automation.PSCredential ($servicePrincipal.ObjectId, (ConvertTo-SecureString $clientSecret -AsPlainText -Force))
+# $secureCredential = New-Object System.Management.Automation.PSCredential ($azureAdServicePrincipal.ObjectId, (ConvertTo-SecureString $clientSecret -AsPlainText -Force))
 # Connect-MsolService -Credential $secureCredential
 
  # Connect-MsolService -AccessToken $adGraphAccessToken 
@@ -917,7 +991,7 @@ catch{ $null}
 # Get-AzureADUserOAuth2PermissionGrant $appId
 
 # Get-AzureADServicePrincipalOAuth2PermissionGrant -ObjectId $appId
-# Get-AzureADServicePrincipalOAuth2PermissionGrant -ObjectId $servicePrincipal.ObjectId
+# Get-AzureADServicePrincipalOAuth2PermissionGrant -ObjectId $azureAdServicePrincipal.ObjectId
 
 # Install-Module -Name Microsoft.Graph -Force
 
