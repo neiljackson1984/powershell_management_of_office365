@@ -94,6 +94,50 @@ Import-Module -Name 'PnP.PowerShell'
 # noticing that MgGraph tends to load version 5.6.0.0 of the assembly, and
 # ExchangeOnlineManagement wants to load version 6.22.1.0 .
 
+#Curiously, this error happens only in powershell core, not Windows Powershell. 
+
+# After carefully letting Exchange Online do its assembly loading, and then letting
+# Microsoft.Graph do its assembly loading, we have the following results:
+#
+# In Windows Powershell:
+#
+#       [System.AppDomain]::CurrentDomain.GetAssemblies() | 
+#           Where-Object Location | 
+#           Where-Object {$_.FullName -match "^System.IdentityModel.Tokens.Jwt\b.*`$" } |
+#           Sort-Object -Property FullName | 
+#           Select-Object -Property FullName, Location, GlobalAssemblyCache, IsFullyTrusted |
+#           fl 
+#
+#       #>>> FullName            : System.IdentityModel.Tokens.Jwt, Version=5.6.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35
+#       #>>> Location            : C:\Program Files\WindowsPowerShell\Modules\Microsoft.Graph.Authentication\1.18.0\Dependencies\System.Ident
+#       #>>>                       ityModel.Tokens.Jwt.dll
+#       #>>> GlobalAssemblyCache : False
+#       #>>> IsFullyTrusted      : True
+#       #>>> 
+#       #>>> FullName            : System.IdentityModel.Tokens.Jwt, Version=6.21.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35
+#       #>>> Location            : C:\Program Files\WindowsPowerShell\Modules\ExchangeOnlineManagement\3.0.0\netFramework\System.IdentityMode
+#       #>>>                       l.Tokens.Jwt.dll
+#       #>>> GlobalAssemblyCache : False
+#       #>>> IsFullyTrusted      : True
+#
+#
+# In Powershell Core:
+#       [System.AppDomain]::CurrentDomain.GetAssemblies() | 
+#           Where-Object Location | 
+#           Where-Object {$_.FullName -match "^System.IdentityModel.Tokens.Jwt\b.*`$" } |
+#           Sort-Object -Property FullName | 
+#           Select-Object -Property FullName, Location, GlobalAssemblyCache, IsFullyTrusted |
+#           fl 
+#
+#       #>>> FullName            : System.IdentityModel.Tokens.Jwt, Version=6.22.1.0, Culture=neutral, 
+#       #>>>                       PublicKeyToken=31bf3856ad364e35
+#       #>>> Location            : C:\Users\Admin\Documents\PowerShell\Modules\ExchangeOnlineManagement\3.1.0\netCore\Sys 
+#       #>>>                       tem.IdentityModel.Tokens.Jwt.dll
+#       #>>> GlobalAssemblyCache : False
+#       #>>> IsFullyTrusted      : True
+#
+# Notice that, uniquley, in Windows Powershell, both versions of the assembly are simultaneously loaded.
+
 # I am seeing which version of the assembly is loaded by using the followeing command:
 ### thanks to https://www.koskila.net/how-to-list-all-of-the-assemblies-loaded-in-a-powershell-session/
 ## [System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object Location | Sort-Object -Property FullName | Select-Object -Property FullName, Location, GlobalAssemblyCache, IsFullyTrusted | Out-GridView
@@ -107,17 +151,17 @@ Import-Module -Name 'PnP.PowerShell'
 # this strategy does not work.
 # to facilitate a partial-workaround, I will save the initialDomainNameOfTenant in the configuration file so that 
 # we can, in teh normal course of operation, call the Connect-ExchangeOnline cmdlet before we call Connect-MgGraph.
-try{
-    $s = @{
-        AppID                   = "234523452345"
-        CertificateThumbprint   = "asdfgasdfasdfasdfasdf"
-        # Organization            = $initialDomainNameOfTenant 
-        Organization            = "whateverc1a6dee0ed884239baaec483d6b31550.onmicrosoft.com"
-        ShowBanner              = $false
-    };    Connect-ExchangeOnline @s
-} catch {
+# try{
+#     $s = @{
+#         AppID                   = "234523452345"
+#         CertificateThumbprint   = "asdfgasdfasdfasdfasdf"
+#         # Organization            = $initialDomainNameOfTenant 
+#         Organization            = "whateverc1a6dee0ed884239baaec483d6b31550.onmicrosoft.com"
+#         ShowBanner              = $false
+#     };    Connect-ExchangeOnline @s
+# } catch {
 
-}
+# }
 
 
 $certificateStorageLocation = "cert:\localmachine\my"
@@ -694,76 +738,56 @@ if(! $configuration){
     $configuration = Get-Content -Raw $pathOfTheConfigurationFile | ConvertFrom-JSON
 }
 
-#at this point, we expect to have a valid $configuration and can proceed with making the connection:
+#at this point, we expect to have a valid $configuration and can proceed with
+#making the connection:
 
-# to-do: confirm that the certificate specified in the configuration file is accessible from the certificate store.  If not, 
-# attempt to load the certificate from the pfx file, if the pfx file exists.
+# to-do: confirm that the certificate specified in the configuration file is
+# accessible from the certificate store.  If not, attempt to load the
+# certificate from the pfx file, if the pfx file exists.
 
-# if($azureConnection.Account -eq $null){
-# if(-not (& {
-# try{[Microsoft.Open.Azure.AD.CommonLibrary.AzureSession]::AccessTokens}
-# catch{ $null}
-# })){
-if(-not (& {
-try{Get-MgOrganization 2> $null}
-# Unlike with the old AzureAD powershell, with Graph, it might be problematic to use a succesfull invoking of Get-MgOrganization to infer
-# that an existing connection exists.  Because the Graph powershell module caches crednetials across sessions, its possible that Get-MgOrganization
-# will return a result without complaint from an old session that I am long done with and have forgotten about.  
-# Is there any way (perhaps an argument we can pass to connect-mggraph) to force the Graph module not to cache crednetials after the end of the session?
-# Answer: I think  "-ContextScope Process" (and maybe also "-ForceRefresh") are the arguments that will have the desired effect.
 
-catch{ $null}
-})){
+function getWeAreConnectedToAzureAD {
+    [OutputType([Boolean])]
+    param ()
     
+    # we really ought to be testing not only that we are connected, but also
+    # that we are connected to the correct tenant (the one specified in the
+    # configuration file)
     
-    # Write-Host "about to do Connect-MgGraph"
-    # # Select-MgProfile -Name Beta
-    # $s = @{
-    #     ClientId                = $configuration.applicationAppId 
-    #     # CertificateThumbprint   = $configuration.certificateThumbprint 
-    #     Certificate             = Get-Item (Join-Path $certificateStorageLocation $configuration.certificateThumbprint )
-    #     TenantId                = $configuration.tenantId 
-    #     ContextScope            = "Process"
-    #     ForceRefresh            = $True
-    # }; Connect-MgGraph @s 
-    # Write-Host "Finished doing Connect-MgGraph"
+    # $azureConnection.Account -eq $null
 
-    # $initialDomainNameOfTenant = ((Get-MgOrganization).VerifiedDomains | where-object {$_.IsInitial -eq $true}).Name
+    try{
+        $result = [Microsoft.Open.Azure.AD.CommonLibrary.AzureSession]::AccessTokens
+    } catch {
+        return $False
+    } 
+    return ( [Boolean] $result )
 
-    $initialDomainNameOfTenant = $configuration.initialDomainNameOfTenant
-
-    # Write-Host "about to do Connect-AzureAD"
-    # $s = @{
-    #     ApplicationId           = $configuration.applicationAppId 
-    #     CertificateThumbprint   = $configuration.certificateThumbprint 
-    #     TenantId                = $configuration.tenantId 
-    # }; $azureConnection = Connect-AzureAD @s 
-    # Write-Host "done"
+}
 
 
+function getWeAreConnectedToMgGraph {
+    [OutputType([Boolean])]
+    param ()
+    [Boolean] (Get-MgOrganization -ErrorAction SilentlyContinue) 
+    # we really ought to be testing not only that we are connected, but also
+    # that we are connected in a way that matches the configuration file.
 
-    #ideally, we should do a separate test for connection for each of the modules (AzureAD, Exchange, and Sharepoint).
-    # However, as a hack, I am only looking at the AzureAD module.
-    # updated: AzureAD --> Microsoft.Graph
+    # Unlike with the old AzureAD powershell, with Graph, it might be
+    # problematic to use a succesfull invoking of Get-MgOrganization to infer
+    # that an existing connection exists.  Because the Graph powershell module
+    # caches crednetials across sessions, its possible that Get-MgOrganization
+    # will return a result without complaint from an old closed session that I
+    # am long done with and have forgotten about.  
+    # Is there any way (perhaps an argument we can pass to connect-mggraph) to
+    # force the Graph module not to cache crednetials after the end of the
+    # session? Answer: I think  "-ContextScope Process" (and maybe also
+    # "-ForceRefresh") are the arguments that will have the desired effect.
+}
 
-    # Install-Module -Name ExchangeOnlineManagement -RequiredVersion 2.0.5 
-    # Install-Module -Name ExchangeOnlineManagement -AllowPrerelease -Confirm:$false -Force
-    # Install-Module -Name ExchangeOnlineManagement -AllowPrerelease -Confirm:$false -Force -Scope CurrentUser
-    
-    
-
-    
-    Write-Host "about to do Connect-ExchangeOnline"
-    $s = @{
-        AppID                   = $configuration.applicationAppId  
-        CertificateThumbprint   = $configuration.certificateThumbprint 
-        Organization            = $initialDomainNameOfTenant 
-        ShowBanner              = $false
-    }
-    Write-Host "arguments are $($s | out-string)"
-    Connect-ExchangeOnline @s
-    Write-Host "Finished doing Connect-ExchangeOnline"
-
+function connectToMgGraph {
+    # [OutputType([Void])]
+    param ()
     Write-Host "about to do Connect-MgGraph"
     # Select-MgProfile -Name Beta
     $s = @{
@@ -773,77 +797,284 @@ catch{ $null}
         TenantId                = $configuration.tenantId 
         ContextScope            = "Process"
         ForceRefresh            = $True
-    }; Connect-MgGraph @s 
+    }; $result = Connect-MgGraph @s 
     Write-Host "Finished doing Connect-MgGraph"
+    return $result
+}
+
+function ensureThatWeAreConnectedToMgGraph {
+    [OutputType([Void])]
+    param ()
+    if( getWeAreConnectedToMgGraph ){
+        Write-Host ("It seems that a connection to Microsoft Graph already " +
+            "exists, so we will not bother attempting to reconnect.")
+    } else {
+        connectToMgGraph 
+    }
+}
 
 
-    # connect to "Security & Compliance PowerShell in a Microsoft 365 organization."
-    # Write-Host "about to do Connect-IPPSSession "
-    # $s = @{
-    #     AppID                   = $configuration.applicationAppId  
-    #     CertificateThumbprint   = $configuration.certificateThumbprint 
-    #     Organization            = $initialDomainNameOfTenant
-    # }
-    # Write-Host "arguments are $($s | out-string)"
-    # Connect-IPPSSession @s
-    # Write-Host "done"
 
-    # Connect-IPPSSession does not seem to be working properly with 
-    # unattended app-based authentication.  Connect-IPPSSession tends to 
-    # launch a username and apssword prompt (and then fails when the oauth redirect url doesn't match).
-    # It appears that connect-ipppssession is a wrapper around connect-exchangeonline.  
-    # connect-ippssession calls connect-exchangeonline with 
-    # a couple of parameters specified:
-    # -UseRPSSession:$true
-    # -ShowBanner:$false
-    # -ConnectionUri 'https://ps.compliance.protection.outlook.com/PowerShell-LiveId' 
-    # -AzureADAuthorizationEndpointUri 'https://login.microsoftonline.com/organizations'
-    
+
+
+
+
+function getWeAreConnectedToExchangeOnline {
+    [OutputType([Boolean])]
+    param ()
+    [Boolean] (Get-ConnectionInformation)
+    # we really ought to be testing not only that we are connected, but also
+    # that we are connected in a way that matches the configuration file.
+
+}
+
+function connectToExchangeOnline {
+    # [OutputType([Void])]
+    param ()
+    Write-Host "about to do Connect-ExchangeOnline"
+    $s = @{
+        AppID                   = $configuration.applicationAppId  
+        CertificateThumbprint   = $configuration.certificateThumbprint 
+        Organization            = $configuration.initialDomainNameOfTenant
+        ShowBanner              = $false
+    }
+    Write-Host "arguments are $($s | out-string)"
+    $result = Connect-ExchangeOnline @s
+    Write-Host "Finished doing Connect-ExchangeOnline"
+    return $result
+}
+
+function ensureThatWeAreConnectedToExchangeOnline {
+    [OutputType([Void])]
+    param ()
+    if( getWeAreConnectedToExchangeOnline ){
+        Write-Host ("It seems that a connection to Exchange Online already " +
+            "exists, so we will not bother attempting to reconnect.")
+    } else {
+        connectToExchangeOnline 
+    }
+}
+
+
+
+
+
+function getWeAreConnectedToSharepointOnline {
+    [OutputType([Boolean])]
+    param ()
+    try {
+        $result = Get-PnpConnection -ErrorAction SilentlyContinue 2> $null
+    } catch {
+        return $False
+    } 
+    return ( [Boolean] $result )
+    # we really ought to be testing not only that we are connected, but also
+    # that we are connected in a way that matches the configuration file.
+}
+
+function connectToSharepointOnline {
+    # [OutputType([Void])]
+    param ()
+    Write-Host "about to do Connect-PnPOnline (which I call 'Sharepoint Online')"    
+    $s = @{
+        Url = ( "https://" +  ($configuration.initialDomainNameOfTenant -Split '\.')[0] + ".sharepoint.com") 
+        ClientId = $configuration.applicationAppId  
+        Tenant = $configuration.tenantId 
+        Thumbprint = $configuration.certificateThumbprint 
+    }; $result = Connect-PnPOnline @s 
+    Write-Host "Finished doing Connect-PnPOnline (which I call 'Sharepoint Online')"   
+    return $result 
+}
+
+function ensureThatWeAreConnectedToSharepointOnline {
+    [OutputType([Void])]
+    param ()
+    if( getWeAreConnectedToSharepointOnline ){
+        Write-Host ("It seems that a connection to Sharepoint Online already " +
+            "exists, so we will not bother attempting to reconnect.")
+    } else {
+        connectToSharepointOnline 
+    }
+}
+
+
+
+
+function getWeAreConnectedToIPSSession {
+    [OutputType([Boolean])]
+    param ()
+    try {
+        $result = Get-RetentionCompliancePolicy -ErrorAction SilentlyContinue 2> $null
+    } catch {
+        return $False
+    } 
+    return ( [Boolean] $result )   
+    #todo: implement me.  
+    # we really ought to be testing not only that we are connected, but also
+    # that we are connected in a way that matches the configuration file.
+
+}
+
+function connectToIPSSession {
+    # [OutputType([Void])]
+    param ()
+        
+
+    # # connect to "Security & Compliance PowerShell in a Microsoft 365 organization."
+    # # Write-Host "about to do Connect-IPPSSession "
+    # # $s = @{
+    # #     AppID                   = $configuration.applicationAppId  
+    # #     CertificateThumbprint   = $configuration.certificateThumbprint 
+    # #     Organization            = $initialDomainNameOfTenant
+    # # }
+    # # Write-Host "arguments are $($s | out-string)"
+    # # Connect-IPPSSession @s
+    # # Write-Host "done"
+
+    # # Connect-IPPSSession does not seem to be working properly with 
+    # # unattended app-based authentication.  Connect-IPPSSession tends to 
+    # # launch a username and apssword prompt (and then fails when the oauth redirect url doesn't match).
+    # # It appears that connect-ipppssession is a wrapper around connect-exchangeonline.  
+    # # connect-ippssession calls connect-exchangeonline with 
+    # # a couple of parameters specified:
+    # # -UseRPSSession:$true
+    # # -ShowBanner:$false
+    # # -ConnectionUri 'https://ps.compliance.protection.outlook.com/PowerShell-LiveId' 
+    # # -AzureADAuthorizationEndpointUri 'https://login.microsoftonline.com/organizations'
+
+
     Write-Host "about to do our own equivalent of 'Connect-IPPSSession' "
     $s = @{
         AppID                               = $configuration.applicationAppId  
         CertificateThumbprint               = $configuration.certificateThumbprint 
-        Organization                         = $initialDomainNameOfTenant
+        Organization                        = $configuration.initialDomainNameOfTenant
         UseRPSSession                       = $true
         ShowBanner                          = $false
         ConnectionUri                       = 'https://ps.compliance.protection.outlook.com/PowerShell-LiveId' 
         AzureADAuthorizationEndpointUri     = 'https://login.microsoftonline.com/organizations'
     }
     Write-Host "arguments are $($s | out-string)"
-    Connect-ExchangeOnline @s
+    $result = Connect-ExchangeOnline @s
     Write-Host "Finished doing our own equivalent of 'Connect-IPPSSession"
 
+    # return $result
 
-
-
-
-
-
-    $sharepointServiceUrl="https://" +  ($initialDomainNameOfTenant -Split '\.')[0] + "-admin.sharepoint.com"
-
-    # $s=@{
-    #     Url=$sharepointServiceUrl
-    #     # Credential=
-    # }; Connect-SPOService @s
-
-    # Connect-PnPOnline `
-        # -ClientId $configuration.applicationAppId  `
-        # -Tenant (Get-AzureAdDomain | where-object {$_.IsInitial}).Name `
-        # -Thumbprint $configuration.certificateThumbprint 
-        
-    # Install-Module -Name "PnP.PowerShell"   
-    Write-Host "about to do Connect-PnPOnline"    
-    Connect-PnPOnline `
-        -Url ( "https://" +  ($initialDomainNameOfTenant -Split '\.')[0] + ".sharepoint.com") `
-        -ClientId $configuration.applicationAppId  `
-        -Tenant $configuration.tenantId `
-        -Thumbprint $configuration.certificateThumbprint 
-    Write-Host "Finished doing Connect-PnPOnline"    
-    # $azureAdApplication = Get-AzureADApplication -SearchString $azureAdApplication.DisplayName
-    
-} else {
-    Write-Host "It seems that a connection to Microsoft Graph (and presumably also ExchangeOnline, and Sharepoint, and etc.) already exists, so we will not bother attempting to reconnect."
 }
+
+function ensureThatWeAreConnectedToIPSSession {
+    [OutputType([Void])]
+    param ()
+    if( getWeAreConnectedToIPSSession ){
+        Write-Host ("It seems that a connection to IPSSession already " +
+            "exists, so we will not bother attempting to reconnect.")
+    } else {
+        connectToIPSSession 
+    }
+}
+
+
+try{ ensureThatWeAreConnectedToExchangeOnline } 
+catch {
+    Write-Host ("encountered error when attempting to ensure that we are " +
+        "connected to Exchange Online: $($Error[0])")
+}
+
+try{ ensureThatWeAreConnectedToMgGraph } 
+catch {
+    Write-Host ("encountered error when attempting to ensure that we are " +
+        "connected to Microsoft Graph: $($Error[0])")
+}
+
+try{ ensureThatWeAreConnectedToSharepointOnline } 
+catch {
+    Write-Host ("encountered error when attempting to ensure that we are " +
+        "connected to Sharepoint Online: $($Error[0])")
+}
+
+try{ ensureThatWeAreConnectedToIPSSession } 
+catch {
+    Write-Host ("encountered error when attempting to ensure that we are " +
+        "connected to IPSSession: $($Error[0])")
+}
+
+
+
+
+
+
+# it is important that the Exchange Online stuff occurs before the MgGraph stuff because
+# Graph loads an older version of the System.IdentityModel.Tokens.Jwt assembly than does
+# Exchange Online.  IF we try to do the graph stuff first, we get an error
+# when trying to do then do the Exchange online stuff.
+
+
+# if(-not (& {
+# try{Get-MgOrganization 2> $null}
+
+
+# catch{ $null}
+# })){
+    
+    
+#     # Write-Host "about to do Connect-MgGraph"
+#     # # Select-MgProfile -Name Beta
+#     # $s = @{
+#     #     ClientId                = $configuration.applicationAppId 
+#     #     # CertificateThumbprint   = $configuration.certificateThumbprint 
+#     #     Certificate             = Get-Item (Join-Path $certificateStorageLocation $configuration.certificateThumbprint )
+#     #     TenantId                = $configuration.tenantId 
+#     #     ContextScope            = "Process"
+#     #     ForceRefresh            = $True
+#     # }; Connect-MgGraph @s 
+#     # Write-Host "Finished doing Connect-MgGraph"
+
+#     # $initialDomainNameOfTenant = ((Get-MgOrganization).VerifiedDomains | where-object {$_.IsInitial -eq $true}).Name
+
+#     # $initialDomainNameOfTenant = $configuration.initialDomainNameOfTenant
+
+#     # Write-Host "about to do Connect-AzureAD"
+#     # $s = @{
+#     #     ApplicationId           = $configuration.applicationAppId 
+#     #     CertificateThumbprint   = $configuration.certificateThumbprint 
+#     #     TenantId                = $configuration.tenantId 
+#     # }; $azureConnection = Connect-AzureAD @s 
+#     # Write-Host "done"
+
+
+
+#     #ideally, we should do a separate test for connection for each of the modules (AzureAD, Exchange, and Sharepoint).
+#     # However, as a hack, I am only looking at the AzureAD module.
+#     # updated: AzureAD --> Microsoft.Graph
+
+#     # Install-Module -Name ExchangeOnlineManagement -RequiredVersion 2.0.5 
+#     # Install-Module -Name ExchangeOnlineManagement -AllowPrerelease -Confirm:$false -Force
+#     # Install-Module -Name ExchangeOnlineManagement -AllowPrerelease -Confirm:$false -Force -Scope CurrentUser
+    
+    
+
+
+
+
+
+#     # $sharepointServiceUrl="https://" +  ($initialDomainNameOfTenant -Split '\.')[0] + "-admin.sharepoint.com"
+
+#     # $s=@{
+#     #     Url=$sharepointServiceUrl
+#     #     # Credential=
+#     # }; Connect-SPOService @s
+
+#     # Connect-PnPOnline `
+#         # -ClientId $configuration.applicationAppId  `
+#         # -Tenant (Get-AzureAdDomain | where-object {$_.IsInitial}).Name `
+#         # -Thumbprint $configuration.certificateThumbprint 
+        
+#     # Install-Module -Name "PnP.PowerShell"   
+
+#     # $azureAdApplication = Get-AzureADApplication -SearchString $azureAdApplication.DisplayName
+    
+# } else {
+#     Write-Host "It seems that a connection to Microsoft Graph (and presumably also ExchangeOnline, and Sharepoint, and etc.) already exists, so we will not bother attempting to reconnect."
+# }
 
 # exit     
 
