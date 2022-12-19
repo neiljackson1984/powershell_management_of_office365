@@ -769,6 +769,8 @@ function getWeAreConnectedToAzureAD {
 function getWeAreConnectedToMgGraph {
     [OutputType([Boolean])]
     param ()
+
+
     [Boolean] (Get-MgOrganization -ErrorAction SilentlyContinue) 
     # we really ought to be testing not only that we are connected, but also
     # that we are connected in a way that matches the configuration file.
@@ -783,6 +785,10 @@ function getWeAreConnectedToMgGraph {
     # force the Graph module not to cache crednetials after the end of the
     # session? Answer: I think  "-ContextScope Process" (and maybe also
     # "-ForceRefresh") are the arguments that will have the desired effect.
+    
+
+    #  ($null -ne [Microsoft.Graph.PowerShell.Authentication.GraphSession]::Instance)
+    # the above might be another way to test for the existence of connectivity.
 }
 
 function connectToMgGraph {
